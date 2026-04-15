@@ -292,6 +292,39 @@ Note on device-vs-published-pubkey: the fixtures' `published_pubkey_hex` is docu
 
 ---
 
+## Phase 1.5.3 — C implementation (2026-04-15)
+
+**~299 lines across 6 files in [`Zyrtnin-org/lib-app-bitcoin@radiant-v1@bd7085c`](https://github.com/Zyrtnin-org/lib-app-bitcoin/tree/radiant-v1).**
+
+**Task 0 RAM measurement (ADR):**
+- Before: `.bss.context` size was `0x3c8` = 968 bytes (Phase 1 baseline)
+- After Phase 1.5.3 additions: `0x4b0` = 1200 bytes (+232B, ~24% growth)
+- Plan target was ~240B. Within budget.
+- **Layout choice:** peer struct members (plan's default). Union with dead `hashPrevouts` not needed — we have comfortable slack.
+
+**Changes:**
+
+| File | Purpose |
+|---|---|
+| `context.h` | Added `hashedOutputHashes[32]` to `segwit_cache_s`. Added `hashOutputHashesCtx`, `currentOutputScriptCtx`, `currentOutputBytesRemaining`, `currentOutputSatoshis`, `outputParsingSubstate` to `struct context_s`. New `radiant_output_substate_t` enum (AMOUNT / SCRIPT_LEN / SCRIPT). |
+| `helpers.{h,c}` | Four new functions (all no-ops for non-Radiant): `radiant_output_hash_init()`, `_reset()`, `_feed_byte()`, `_finalize()`. The FSM accumulates each output's 76-byte summary (`nValue + sha256d(scriptPubKey) + totalRefs=0 + refsHash=zeros`) into `hashOutputHashesCtx`. Canonical-P2PKH enforcement at `SCRIPT_LEN` state (reject != 25). Added `#include "apdu/apdu_constants.h"`. |
+| `handler/hash_input_start.c` | Calls `radiant_output_hash_init()` on first APDU. |
+| `handler/hash_input_finalize_full.c` | Radiant FSM is fed per-output bytes at end of `handle_output_state` (before the discardSize memmove). Finalization alongside the existing `hashedOutputs` finalize. `hash_input_finalize_full_reset` calls `radiant_output_hash_reset()` for full cancel-path coverage. |
+| `transaction.c:721-732` | Inserts `hashedOutputHashes` into `transactionHashFull.sha256` BEFORE `hashedOutputs` when Radiant. |
+
+**Build + regression outcomes:**
+- `COIN=radiant` builds clean. app.hex SHA256: `ecfab19af630dd2d1f06d951ffa2c37852508590af0ac96e3534d59a1c395d72`
+- `COIN=bitcoin_cash` still builds clean (regression = build-only per plan acceptance criteria). SHA256 **differs from v0.0.2-bootstrap** because context struct is larger and Radiant helpers exist as symbols. Binary is larger but BCH runtime behavior is unchanged (all Radiant code guarded by `if (COIN_KIND == COIN_KIND_RADIANT)` runtime checks + compile-time constant folding should eliminate dead branches at `-Os`).
+- CI [run 24477719717](https://github.com/Zyrtnin-org/app-radiant/actions/runs/24477719717): both variants green.
+
+**Plugin pre-check ([`Zyrtnin-org/Electron-Wallet@radiant-ledger-512`](https://github.com/Zyrtnin-org/Electron-Wallet/tree/radiant-ledger-512), commit `6b6e2c7`):**
+
+`electroncash_plugins/ledger/ledger.py` now pre-checks every output for canonical 25-byte P2PKH (hex matches `^76a914[0-9a-f]{40}88ac$`). If not, raises a clear wallet-UI error before any APDU dispatch. Pairs with device-side enforcement for defense-in-depth.
+
+**Not yet tested on device.** Phase 1.5.4 compare harness is next — sideload, feed golden vectors, verify device signatures against oracle sighashes.
+
+---
+
 ## Pins recorded for reproducibility
 
 - `LedgerHQ/app-boilerplate` @ `ac10944e8bfed3d1e57af9a856dd6ab716a74a1b`

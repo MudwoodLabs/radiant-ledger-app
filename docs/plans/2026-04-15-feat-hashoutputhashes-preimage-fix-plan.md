@@ -377,20 +377,16 @@ Implement the full C diff on `Zyrtnin-org/lib-app-bitcoin@radiant-v1` branch.
 
 **Tasks:**
 
-1. **Task 0** (~15 min) — build `COIN=radiant` variant, inspect `.map` to confirm the ~240B of new state fits the app-RAM budget. Research indicates comfortable slack. ADR note in `INVESTIGATION.md`: union with dead `hashPrevouts` (tight) vs peer struct member (roomy). Default: peer; fall back to union only on linker error.
-2. **`context.h`** — add `hashedOutputHashes[32]` to `segwit_cache_s`; add new `cx_sha256_t` hashers + state fields to `struct context_s` per the layout decided in Task 0
-3. **`handler/hash_input_start.c`** — initialize `hashOutputHashesCtx` when `COIN_KIND == COIN_KIND_RADIANT`
-4. **`handler/hash_input_finalize_full.c`** — per-output state machine (see Technical Approach §3):
-   - Track `currentOutputSatoshis`, `currentOutputBytesRemaining`, `currentOutputScriptCtx` across APDU chunk boundaries
-   - Enforce canonical P2PKH: reject (`SW_INCORRECT_DATA`) any output whose scriptPubKey is not exactly 25 bytes matching `76 a9 14 <20> 88 ac`
-   - Per output: emit 4-field 76-byte summary into `hashOutputHashesCtx`
-   - Finalize `hashOutputHashesCtx` → `segwit.cache.hashedOutputHashes` (double-SHA256) at output-stream end
-5. **`transaction.c:721-732`** — append `hashedOutputHashes` into `transactionHashFull.sha256` BEFORE `hashedOutputs` when Radiant
-6. **`hash_input_finalize_full_reset`** — clear all new state fields; audit UI cancel path calls this
-7. **Runtime assertion** — ONE entry-point assertion at the top of the new finalize-hashOutputHashes function: `if (COIN_KIND != COIN_KIND_RADIANT) return SW_TECHNICAL_PROBLEM;`. Not per-write. The real regression control is the CI SHA256 diff of the `bitcoin_cash` variant
-8. **Electron-Wallet plugin pre-check** — modify `electroncash_plugins/ledger/ledger.py` (or the Radiant wallet class it touches) to validate every output's scriptPubKey is canonical-25-byte-P2PKH **before** sending the APDU sequence. If user attempts to send to a P2SH address (`3…`) or include an OP_RETURN memo, surface a clear wallet-UI error ("Radiant Ledger app v1 does not support P2SH destinations. Use a software wallet, or wait for v2.") and abort *before* any device interaction. This avoids the bad UX of "approve on device → device rejects → cryptic status code → user confused." Post-check on device stays as defense-in-depth.
-9. Commit to `radiant-v1` branch on `Zyrtnin-org/lib-app-bitcoin`; CI builds both `bitcoin_cash` (regression) and `radiant` (new) on `Zyrtnin-org/app-radiant`
-10. Bump `Zyrtnin-org/app-radiant` submodule pin to the new commit
+1. [x] **Task 0** — RAM check done: context.bss grew from 0x3c8 (968B) to 0x4b0 (1200B), +232B, ~24% growth — within budget. Chose peer struct members (plan default) per ADR in INVESTIGATION.md.
+2. [x] **`context.h`** — `hashedOutputHashes[32]` added to `segwit_cache_s`; `hashOutputHashesCtx`, `currentOutputScriptCtx`, `currentOutputBytesRemaining`, `currentOutputSatoshis`, `outputParsingSubstate` added to `struct context_s`. New `radiant_output_substate_t` enum.
+3. [x] **`handler/hash_input_start.c`** — calls `radiant_output_hash_init()` on first APDU (no-op for non-Radiant)
+4. [x] **`handler/hash_input_finalize_full.c`** — Radiant FSM feeds `discardSize` bytes of each just-completed output into `hashOutputHashesCtx`; canonical-P2PKH check rejects non-25-byte scripts with `SW_INCORRECT_DATA`; finalization alongside existing `hashedOutputs` finalize. All logic in helpers.c (`radiant_output_hash_*` family).
+5. [x] **`transaction.c:721-732`** — inserts `hashedOutputHashes` into `transactionHashFull.sha256` BEFORE `hashedOutputs` guarded by `COIN_KIND == COIN_KIND_RADIANT`
+6. [x] **`hash_input_finalize_full_reset`** — calls `radiant_output_hash_reset()` which unconditionally clears all new FSM state (Security H2 / SpecFlow #4+#6 closure)
+7. [x] **Runtime assertion** — one at entry of `radiant_output_hash_finalize()`. Per-write asserts dropped per review.
+8. [x] **Electron-Wallet plugin pre-check** — `electroncash_plugins/ledger/ledger.py` pre-check loop rejects non-canonical-P2PKH outputs with a user-friendly error before any APDU dispatch. Committed to `Zyrtnin-org/Electron-Wallet@radiant-ledger-512`.
+9. [x] **Commit + push**: `Zyrtnin-org/lib-app-bitcoin@radiant-v1 @bd7085c` (+299 lines across 6 files). `Zyrtnin-org/app-radiant@develop` bumped submodule.
+10. [x] **Submodule pin bumped**: `Zyrtnin-org/app-radiant@develop` now points at `lib-app-bitcoin@bd7085c`.
 
 **Deliverables:**
 
