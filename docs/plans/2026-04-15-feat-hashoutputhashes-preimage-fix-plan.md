@@ -135,7 +135,7 @@ struct context_s {
 };
 ```
 
-Research finding: `hashOutputHashesCtx` and `currentOutputScriptCtx` can potentially share RAM with `segwit.hash.hashPrevouts` (dead by output-streaming time). **Finalize RAM layout in Phase 1.5.2** after on-device sizing measurement; not a blocking design decision.
+Research finding: `hashOutputHashesCtx` and `currentOutputScriptCtx` can potentially share RAM with `segwit.hash.hashPrevouts` (dead by output-streaming time). **Finalize RAM layout in Phase 1.5.3 Task 0** after a quick on-device sizing check; not a blocking design decision. Default to peer struct members unless the build errors on size.
 
 #### 2. `handler/hash_input_start.c` — initialize Radiant-only hashers
 
@@ -173,11 +173,15 @@ if (COIN_KIND == COIN_KIND_RADIANT) {
                 hash bytes into currentOutputScriptCtx;
                 decrement currentOutputBytesRemaining;
                 on 0 remaining:
-                    // Second SHA256 pass (double hash) — reuse same ctx with CX_LAST + re-init
+                    // Double SHA256 of the scriptPubKey (Radiant uses sha256d per radiantjs).
+                    // Follow the same init/update/CX_LAST pattern lib-app-bitcoin already uses
+                    // for other sha256d computations (e.g., transactionHashFull finalization).
                     uint8_t digest1[32];
                     cx_hash_no_throw(&currentOutputScriptCtx.header, CX_LAST, NULL, 0, digest1, 32);
+                    cx_sha256_t finalCtx;
+                    cx_sha256_init_no_throw(&finalCtx);
                     uint8_t scriptHash[32];  // sha256d result
-                    cx_hash_sha256(digest1, 32, scriptHash, 32);
+                    cx_hash_no_throw(&finalCtx.header, CX_LAST, digest1, 32, scriptHash, 32);
                     // Now emit the 4-field summary:
                     emit scriptHash (32 bytes) into hashOutputHashesCtx;
                     emit 0x00 0x00 0x00 0x00 (4-byte totalRefs=0) into hashOutputHashesCtx;
@@ -290,7 +294,11 @@ Per SpecFlow finding #7: validate the oracle three ways before trusting it, not 
 2. Write `scripts/oracle-self-validate.py` — runs the three checks below
 3. **Validation check A** — reconstruct sighash for a known mainnet-confirmed RXD tx; verify that the tx's on-chain signature validates against the oracle-computed sighash + known public key via `secp256k1.verify`. Target tx: candidates surfaced in brainstorm Open Question #2 (the source-wallet tx that funded us at `3521c21…` is a candidate).
 4. **Validation check B** — hand-compute one preimage byte-for-byte against the spec (write the expected preimage hex in a comment or fixture file). Diff against oracle output.
-5. **Validation check C** — cross-check against at least one non-radiantjs source. Candidate: FlipperHub's PHP signing implementation (`blockchain_rpc.php` — Eric's own code, running on mainnet for Glyph NFT minting). If the PHP code does the same preimage, compare.
+5. **Validation check C** — independent-signer agreement. Use FlipperHub's existing PHP flow (`blockchain_rpc.php`), which calls `radiant-cli signrawtransaction` on the Docker `radiant-mainnet` node. Feed the same unsigned tx + prevout data through that path, get back a signed tx. Extract `(signature, pubkey)` from the signed tx's scriptSig. Verify against the oracle's computed sighash via `secp256k1.verify`.
+
+   **What this proves**: our oracle's sighash matches what a real Radiant node produces signatures against.
+   **What this does NOT prove**: oracle's preimage bytes match the node's preimage bytes (node doesn't expose them).
+   Checks A + B cover byte-level correctness; check C covers "a second end-to-end implementation agrees on the signed digest."
 6. Python oracle commits to `Zyrtnin-org/radiant-ledger-app` under `scripts/`.
 
 **Deliverables:**
@@ -303,32 +311,17 @@ Per SpecFlow finding #7: validate the oracle three ways before trusting it, not 
 
 ---
 
-#### Phase 1.5.2 — RAM budget measurement + context layout (~0.5 day)
+#### Phase 1.5.2 — Golden test vectors (~0.5 day)
 
-Before touching the C code in earnest, measure how much RAM we have to spend.
-
-**Tasks:**
-
-1. Build current `COIN=radiant` variant with `-DDEBUG=1` to get `.map` output
-2. Compute: total `.data` + `.bss` usage of `struct context_s`; compare against Nano S Plus app-RAM budget (SDK documents per-device)
-3. Decide: do we add the two new `cx_sha256_t` hashers + 32-byte cache field as peer struct members (~240B total), or union them with the dead-by-that-point `segwit.hash.hashPrevouts`?
-4. Write the ADR-style note in `INVESTIGATION.md` explaining the choice
-5. Update `context.h` accordingly (draft PR; not merged yet until Phase 1.5.3 is ready)
-
-**Deliverables:**
-
-- RAM budget measurement in `INVESTIGATION.md`
-- Chosen memory layout committed to a branch on `Zyrtnin-org/lib-app-bitcoin`
-
----
-
-#### Phase 1.5.2b — Golden test vectors (~0.5 day)
+(Formerly 1.5.2b — the standalone "RAM budget" phase was absorbed into Phase 1.5.3 Task 0 as a ~15-min check. Research already indicates comfortable slack; not worth a standalone half-day phase.)
 
 Per SpecFlow finding #8: fill the gap between oracle existing and C implementation. Produce static byte-level fixtures that both oracle and C must match.
 
+**Source of test vectors**: direct `getrawtransaction <txid>` + `getrawtransaction <vin[i].txid> true` calls against the FlipperHub `radiant-mainnet` Docker container. Rationale: we control the node, can query it authoritatively over SSH, and can pick real mainnet-confirmed txs of each shape. Block-explorer APIs are a fallback only if the Docker node is unreachable. All vectors are real confirmed RXD transactions — not synthesized — so each one is a self-contained proof that oracle output matches mainnet-reality.
+
 **Tasks:**
 
-1. Pick 4 representative tx shapes:
+1. Pick 4 representative tx shapes (each sourced from a real confirmed RXD tx):
    - 1-in / 1-out (sweep)
    - 1-in / 2-out (with change — matches our stuck 1 RXD test)
    - 3-in / 2-out (multi-input)
@@ -351,18 +344,19 @@ Implement the full C diff on `Zyrtnin-org/lib-app-bitcoin@radiant-v1` branch.
 
 **Tasks:**
 
-1. **`context.h`** — add `hashedOutputHashes[32]` to `segwit_cache_s`; add new `cx_sha256_t` hashers + state fields to `struct context_s` per Phase 1.5.2 layout decision
-2. **`handler/hash_input_start.c`** — initialize `hashOutputHashesCtx` when `COIN_KIND == COIN_KIND_RADIANT`
-3. **`handler/hash_input_finalize_full.c`** — per-output state machine (see Technical Approach §3):
+1. **Task 0** (~15 min) — build `COIN=radiant` variant, inspect `.map` to confirm the ~240B of new state fits the app-RAM budget. Research indicates comfortable slack. ADR note in `INVESTIGATION.md`: union with dead `hashPrevouts` (tight) vs peer struct member (roomy). Default: peer; fall back to union only on linker error.
+2. **`context.h`** — add `hashedOutputHashes[32]` to `segwit_cache_s`; add new `cx_sha256_t` hashers + state fields to `struct context_s` per the layout decided in Task 0
+3. **`handler/hash_input_start.c`** — initialize `hashOutputHashesCtx` when `COIN_KIND == COIN_KIND_RADIANT`
+4. **`handler/hash_input_finalize_full.c`** — per-output state machine (see Technical Approach §3):
    - Track `currentOutputSatoshis`, `currentOutputBytesRemaining`, `currentOutputScriptCtx` across APDU chunk boundaries
    - Enforce canonical P2PKH: reject (`SW_INCORRECT_DATA`) any output whose scriptPubKey is not exactly 25 bytes matching `76 a9 14 <20> 88 ac`
    - Per output: emit 4-field 76-byte summary into `hashOutputHashesCtx`
    - Finalize `hashOutputHashesCtx` → `segwit.cache.hashedOutputHashes` (double-SHA256) at output-stream end
-4. **`transaction.c:721-732`** — append `hashedOutputHashes` into `transactionHashFull.sha256` BEFORE `hashedOutputs` when Radiant
-5. **`hash_input_finalize_full_reset`** — clear all new state fields; audit UI cancel path calls this
-6. **Runtime assertions** — guard every Radiant-specific write with `COIN_KIND == COIN_KIND_RADIANT` check (SpecFlow #9: prevents silent `bitcoin_cash` regression)
-7. Commit to `radiant-v1` branch; CI builds both `bitcoin_cash` (regression) and `radiant` (new)
-8. Bump `Zyrtnin-org/app-radiant` submodule pin to the new commit
+5. **`transaction.c:721-732`** — append `hashedOutputHashes` into `transactionHashFull.sha256` BEFORE `hashedOutputs` when Radiant
+6. **`hash_input_finalize_full_reset`** — clear all new state fields; audit UI cancel path calls this
+7. **Runtime assertions** — guard every Radiant-specific write with `COIN_KIND == COIN_KIND_RADIANT` check (SpecFlow #9: prevents silent `bitcoin_cash` regression)
+8. Commit to `radiant-v1` branch; CI builds both `bitcoin_cash` (regression) and `radiant` (new)
+9. Bump `Zyrtnin-org/app-radiant` submodule pin to the new commit
 
 **Deliverables:**
 
@@ -422,6 +416,14 @@ Sign and broadcast the 1-in/2-out spend that originally failed. Unstick the 1 RX
 - Updated `INVESTIGATION.md` with the fix arc + final mainnet txid
 - Tag `v0.0.3-sighash-fix` on `Zyrtnin-org/app-radiant` at the commit used
 
+**If the mainnet test FAILS** (rejection reason still "script execution error" or new error):
+
+1. Capture the exact `blockchain.transaction.broadcast` response — the node's rejection string often carries more detail than Electron-Wallet's generic error surface. Pull it from `/tmp/electron-radiant.log` or by manually broadcasting the signed tx hex via Electrum CLI to see the raw response.
+2. Run `compare-device-to-oracle.py` against the actual failed tx (same unsigned tx + prevout) with debug tracing enabled.
+   - **If device ↔ oracle matches but mainnet still rejects**: a second preimage discrepancy exists that neither we nor radiantjs know about. Trigger a focused brainstorm (scope: what ELSE in radiant-node's signing path differs). Do NOT retry on mainnet until that diagnosis lands.
+   - **If device ↔ oracle MISMATCHES for a tx shape Phase 1.5.4 said was fine**: the golden-vector set didn't cover the real-tx shape. Add it to vectors, iterate Phase 1.5.3 → 1.5.4 until the new shape passes the harness.
+3. Whatever the outcome, append it to `INVESTIGATION.md` — do not mainnet-retry without changing something material in the code or vectors. Protects the dev's remaining RXD dust and makes the failure arc self-documenting for Phase 3 community testers later.
+
 ---
 
 #### Phase 1.5.6 — Pre-fix regression guard (~0.25 day)
@@ -448,8 +450,6 @@ SpecFlow finding #11: prevent accidental dual-mode signing (device producing bot
 
 **Implement full `GetPushRefs` opcode-aware scan now.** Would allow non-P2PKH outputs in v1. **Rejected**: adds ~50-100 lines of opcode-walking C code, turns v1 into v1.5. We want the canonical-P2PKH short-circuit for v1 because it makes correctness provable and trivially auditable. v2 replaces it.
 
-**Defer v1 sign support; ship "address-derivation-only" v1.** The Ledger Radiant app COULD ship without the signing fix — users could use it as a watching-only wallet deriving Radiant addresses while continuing to sign on software wallets. **Rejected**: ~nobody wants to buy a hardware wallet to watch their coins. The whole point is signing security.
-
 ---
 
 ## Acceptance Criteria
@@ -474,7 +474,7 @@ SpecFlow finding #11: prevent accidental dual-mode signing (device producing bot
 
 - [ ] CI matrix green on every push: builds both `bitcoin_cash` AND `radiant` variants
 - [ ] Local↔CI artifact SHA256 byte-identical for `radiant` variant
-- [ ] RAM usage fits Nano S Plus app budget; measured in Phase 1.5.2
+- [ ] RAM usage fits Nano S Plus app budget; measured in Phase 1.5.3 Task 0
 - [ ] No regression to Phase 0 / Phase 1 tests already passing (path-lock defense, address derivation, P2_CASHADDR rejection, plugin wizard)
 - [ ] Runtime `COIN_KIND == COIN_KIND_RADIANT` assertions present at every Radiant-specific write (SpecFlow #5/#9)
 
@@ -522,7 +522,7 @@ Explicitly **not** a release gate:
 | APDU-chunk-spanning scriptPubKey mishandled | Medium | High (wrong sighash for some tx shapes) | State machine in `handle_output_state` tracks `currentOutputBytesRemaining`; consolidation golden vector (30+ inputs) exercises the boundary |
 | Silent `bitcoin_cash` regression from un-gated Radiant write | Low | High (breaks upstream BCH variant) | Runtime `COIN_KIND == COIN_KIND_RADIANT` assertions at every new-code write site; CI matrix builds both variants every push |
 | User reject / cancel leaves stale hasher state | Medium | Medium (next sign fails until app reopen) | Extend `hash_input_finalize_full_reset`; audit cancel path explicitly; regression test in compare harness |
-| RAM budget overrun from adding 2 `cx_sha256_t` + state fields | Low | Medium (build fails, linker error) | Phase 1.5.2 measures first, chooses layout; can union with dead `hashPrevouts` if tight |
+| RAM budget overrun from adding 2 `cx_sha256_t` + state fields | Low | Medium (build fails, linker error) | Phase 1.5.3 Task 0 measures first; fall back to union with dead `hashPrevouts` if tight |
 | Mainnet rejects again due to a SECOND preimage difference we haven't found | Very low | High (another sign-reject cycle) | Oracle self-validation against real mainnet tx *before* any device signing proves the expected sighash is what mainnet uses. If oracle → validates via real signature, we know the format is correct |
 | Radiant consensus changes hashOutputHashes format between plan-write and ship | Very low | High (signs stop working on a future block) | No mitigation proposed — Radiant hasn't had consensus changes in years; flag only |
 | Ledger firmware update breaks something between now and mainnet sign | Low | Medium | Test on same firmware version used for Phase 1 validation; record version in `INVESTIGATION.md` |
@@ -532,11 +532,10 @@ Explicitly **not** a release gate:
 ## Resource Requirements
 
 - **People**: 1 developer (C + Python); same person as Phase 1
-- **Time**: ~6-10 focused days
+- **Time**: ~5.5-9.5 focused days
   - 1 day Phase 1.5.1 oracle + triple validation
-  - 0.5 day Phase 1.5.2 RAM budget
-  - 0.5 day Phase 1.5.2b golden vectors
-  - 3-5 days Phase 1.5.3 C implementation (the bulk)
+  - 0.5 day Phase 1.5.2 golden vectors
+  - 3-5 days Phase 1.5.3 C implementation (the bulk; includes the Task-0 RAM check)
   - 1-2 days Phase 1.5.4 compare harness
   - 0.5 day Phase 1.5.5 mainnet final test
   - 0.25 day Phase 1.5.6 regression guard
