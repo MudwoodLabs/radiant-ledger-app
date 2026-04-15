@@ -106,11 +106,30 @@ Runtime path-lock validated against four test cases:
 | `m/44'/0'/0'/0/0` (Bitcoin) | SW 6a80 | reject ✅ |
 | `m/44'/145'/0'/0/0` (BCH) | SW 6a80 | reject ✅ |
 
+## Plugin diff (2026-04-15 — continuation of Phase 1)
+
+**Branch**: [`Zyrtnin-org/Electron-Wallet@radiant-ledger-512`](https://github.com/Zyrtnin-org/Electron-Wallet/tree/radiant-ledger-512)
+
+36 lines changed across 4 files:
+
+- `electroncash/keystore.py` — `bip44_derivation(account_id, *, coin_type=None)`. Software-wallet behavior unchanged; optional kwarg lets hardware-wallet flow override
+- `electroncash/base_wizard.py:269` — hardware-wallet wizard now defaults to `bip44_derivation(0, coin_type=512)` so NEW Radiant Ledger wallets land at `m/44'/512'/0'` automatically. User can still override in the derivation dialog
+- `electroncash_plugins/ledger/ledger.py:590` — sanity xpub probe now requests `m/44'/512'/0'` instead of `m/44'/0'/0'`. Doubles as app-identity check since our Radiant app rejects non-512 paths with SW_INCORRECT_DATA — a stock Bitcoin app would NOT reject, so a probe success at `m/44'/512'` actually proves we're talking to the Radiant variant
+- `electroncash_plugins/ledger/__init__.py` — plugin description now points to the Radiant app (not stock Bitcoin) and explicitly warns users with pre-existing `m/44'/0'` funds that migration is required
+
+Smoke tests (no RXD required):
+- `py_compile` clean on all 4 files
+- Standalone `bip44_derivation` call-site output verified:
+  - software default: `m/44'/0'/0'`
+  - hardware Radiant acc 0: `m/44'/512'/0'`
+  - hardware Radiant acc 1: `m/44'/512'/1'`
+
 Outstanding for Phase 1 finish line:
-- Plugin work: modify Electron Radiant `electroncash_plugins/ledger/ledger.py` derivation path constant
-- Send RXD to `1LkYcHB...` (user-funded)
-- Sign + broadcast a 1-in/1-out send via the Radiant app on Ledger
-- Verify mainnet acceptance via `getrawtransaction`
+- Install Electron-Wallet deps locally to run `./electron-radiant` (Qt, ecdsa, etc.) — or defer to the user's existing env
+- User funds `1LkYcHBgsNMvtYfySeZPh29fPrJaVFhMRc` with a small RXD amount
+- Create wallet in Electron Radiant via "Use a hardware device" wizard → should land at `m/44'/512'/0'`
+- Sign + broadcast a 1-in/1-out send
+- Verify mainnet acceptance
 
 ---
 
