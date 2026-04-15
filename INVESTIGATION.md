@@ -325,6 +325,55 @@ Note on device-vs-published-pubkey: the fixtures' `published_pubkey_hex` is docu
 
 ---
 
+## 🎉 Phase 1.5 — COMPLETE (2026-04-15)
+
+**First Ledger-signed mainnet RXD transaction.**
+
+```
+txid:  d942de8c94c2e1a9ed5afe14e8505556170e3d5243ecbfa80260a1feeaf3d679
+block: 420756
+amount: 0.5 RXD from 1LkYcHBgsNMvtYfySeZPh29fPrJaVFhMRc → 16nqCDuBCQEcgRUZ3DCigtq18gfjEWUuyS
+signed by: Nano S Plus, Radiant app v0.0.3-sighash-fix, path m/44'/512'/0'/0/0
+explorer: https://radiantexplorer.com/tx/d942de8c94c2e1a9ed5afe14e8505556170e3d5243ecbfa80260a1feeaf3d679
+```
+
+Previously-stuck 1 RXD at the dev Ledger address is now **unstuck**. Address balance 1.0 → 0.0, totalSent 0 → 1.0 confirmed.
+
+### Mid-Phase-1.5.4 bug found + fixed (2026-04-15)
+
+Electron-Wallet's first signing attempt returned `6702` because my byte-feeder into the Radiant FSM was placed AFTER the switch in `handle_output_state`, meaning it fired for BOTH the `OUTPUT_PARSING_NUMBER_OUTPUTS` case (which discards 1-3 varint count bytes) AND the `OUTPUT_PARSING_OUTPUT` case. The FSM received the vout-count varint as "amount bytes," corrupting every subsequent hash.
+
+Fix: moved the feeder inside the `OUTPUT_PARSING_OUTPUT` case only (lib-app-bitcoin@radiant-v1@82a5492). Prominent comment added warning against moving back.
+
+### Phase 1.5.4 — device ↔ oracle verification
+
+After the fix: device-signed tx's signature **verifies against oracle-computed sighash** via local secp256k1:
+- Oracle sighash for input[0]: `db4097bd90b6ccf45bb64f7bcd3cee2f8bd40cddbcbe97d97eb390791f61657a`
+- Device DER signature: `3045022100b29210e8…bef6ecd92fe63b10c6c0f3bd`
+- Device pubkey: `0245e713b307d0280d7d621292cfc218d5e649e127c72e8420824ecd246207ea8e` (compressed, same as m/44'/512'/0'/0/0 derivation)
+- `ecdsa.verify_digest(sig_der, oracle_sighash, pubkey)` → **PASS**
+
+This proves device preimage = oracle preimage = Radiant-network preimage. The `hashOutputHashes` on-device computation is correct.
+
+### Phase 1.5.5 — mainnet broadcast
+
+0.5 RXD spend broadcast via Electron-Wallet, confirmed in block 420756 a few minutes later. No errors. Fee 0.0226 RXD (10,000 sats/byte — Radiant Core V2 increased fees; the explorer's fee column matches current network policy).
+
+### Deliverables
+
+- `Zyrtnin-org/app-radiant` → tagged **`v0.0.3-sighash-fix`**
+- `Zyrtnin-org/lib-app-bitcoin@radiant-v1` → `82a5492` (Phase 1.5.3 + FSM-placement fix)
+- `Zyrtnin-org/Electron-Wallet@radiant-ledger-512` → plugin with coin_type 512 + non-P2PKH pre-check
+- `Zyrtnin-org/radiant-ledger-app` → this repo; plan + brainstorm + fixtures + oracle + investigation notes
+
+### What this unlocks
+
+- Community members can sideload this app and hold RXD on a Nano S Plus.
+- Phase 2 (hardening) and Phase 3 (community tester validation) from the parent v1 plan can now execute.
+- Phase 4 (v1.0.0 release) is unblocked, subject to the parallel dependency-cleanup workstream (btchip-python setup.py vendoring, Electron-Wallet packaging) and the builder-image mirror-pin deliverable added in review.
+
+---
+
 ## Pins recorded for reproducibility
 
 - `LedgerHQ/app-boilerplate` @ `ac10944e8bfed3d1e57af9a856dd6ab716a74a1b`

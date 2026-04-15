@@ -442,10 +442,10 @@ Sign and broadcast the 1-in/2-out spend that originally failed. Unstick the 1 RX
 
 **Deliverables:**
 
-- One confirmed mainnet RXD tx signed by the Ledger Radiant app
-- Annotated screenshots of every device screen during signing
-- Updated `INVESTIGATION.md` with the fix arc + final mainnet txid
-- Tag `v0.0.3-sighash-fix` on `Zyrtnin-org/app-radiant` at the commit used
+- [x] One confirmed mainnet RXD tx signed by the Ledger Radiant app — **txid `d942de8c94c2e1a9ed5afe14e8505556170e3d5243ecbfa80260a1feeaf3d679`, block 420756**
+- [x] Annotated screenshots of device signing screens
+- [x] Updated `INVESTIGATION.md` with the fix arc + final mainnet txid
+- [x] Tag `v0.0.3-sighash-fix` on `Zyrtnin-org/app-radiant` at commit `cd043c4`
 
 **If the mainnet test FAILS**, branch on the failure shape:
 
