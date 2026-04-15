@@ -35,7 +35,7 @@ Scope is intentionally tight: **fix the one preimage field, add one canonical-fo
 3. Test harness verifies each signature against `(oracle_sighash, device_pubkey)` using a local `secp256k1` check.
 4. If verification passes, the device signed what the oracle expected. If it fails, preimage divergence — fall back to raw APDU tracing.
 
-The harness treats the oracle itself as trusted only after it has been validated against at least one mainnet-confirmed tx with known `(signature, pubkey)` — see Open Questions #5 on test-vector sourcing.
+The harness treats the oracle itself as trusted only after it has been validated against at least one mainnet-confirmed tx with known `(signature, pubkey)` — see Open Questions #2 on test-vector sourcing.
 
 **Keep the runtime-`if` pattern, not `#ifdef`.** Research confirms lib-app-bitcoin's house style. `if (COIN_KIND == COIN_KIND_RADIANT)` gets constant-folded by GCC when `-DCOIN_KIND=COIN_KIND_RADIANT` (enum constant, not string).
 
@@ -92,17 +92,13 @@ Bottom line: Radiant is byte-compatible with BCH at every layer **except** the i
 
 ## Open Questions
 
-1. **Schnorr signature support**. Lib-app-bitcoin emits ECDSA DER. Radiant accepts both (verified via `interpreter.cpp:2681-2689`). Schnorr would be shorter/cheaper but requires device-side Schnorr-BCH impl. **Deferred to post-v1** — ECDSA works and is what we're emitting.
+(Items already deferred to v2 — Schnorr signatures, `SIGHASH_SINGLE`, `SIGHASH_ANYONECANPAY`, real `GetPushRefs`, Speculos CI, etc. — are captured in the v2 Tracking section below, not duplicated here.)
 
-2. **`SIGHASH_SINGLE` path**. Radiant's SINGLE construction for `hashOutputHashes` differs from the ALL/NONE construction (summary blob vs serialized output — see `interpreter.cpp:2623-2632`). Our v1 rejects everything except `0x41` so this is moot. If a future Electron-Wallet flow ever needs SINGLE (it doesn't today), we re-evaluate.
+1. **Dependency cleanup for shipping**. `btchip-python`'s broken setup.py and Electron-Wallet's unvendored dependency tree are real v1-release blockers but separate from this sighash work. Track as a parallel workstream, not part of this brainstorm.
 
-3. **`ANYONECANPAY`**. Same story — gate rejects. Re-evaluate if needed.
+2. **Test vector sourcing**. Oracle needs 1–3 known-good mainnet-confirmed RXD txs with full tx hex + per-input prevout `{scriptPubKey, amount}` to self-validate against pre-computed `(signature, pubkey)` pairs. Candidate sources: (a) Radiant block explorers that expose vin scriptSig + prevout via JSON API (`radiantexplorer.com/api/tx/<txid>` may work — needs testing), (b) the incoming `3521c21…` tx on our dev wallet (has scriptSig + can look up prevout `6e57ee8fb9…`), (c) direct `getrawtransaction` from the `radiant-mainnet` Docker container on FlipperHub. Decide in plan phase which source is most reliable.
 
-4. **Dependency cleanup for shipping**. btchip-python's broken setup.py and Electron-Wallet's unvendored dependency tree are real v1-release blockers but separate from this sighash work. **Track as parallel workstream**, not part of this brainstorm.
-
-5. **Test vector sourcing**. Oracle needs 1–3 known-good mainnet-confirmed RXD txs with full tx hex + per-input prevout `{scriptPubKey, amount}` to self-validate against pre-computed `(signature, pubkey)` pairs. Candidate sources: (a) Radiant block explorers that expose vin scriptSig + prevout via JSON API (`radiantexplorer.com/api/tx/<txid>` may work — needs testing), (b) the incoming `3521c21…` tx on our dev wallet (has scriptSig + can look up prevout `6e57ee8fb9…`), (c) direct `getrawtransaction` from the `radiant-mainnet` Docker container on FlipperHub. Decide in plan phase which source is most reliable.
-
-6. **Community tester build matrix with real Python oracle**. Once oracle exists, Phase 3 community testing can include "tester runs Python oracle + compares against their device-signed sigs." Richer than just "txid confirmed." Noted for plan phase.
+3. **Community tester build matrix with real Python oracle**. Once oracle exists, Phase 3 community testing can include "tester runs Python oracle + compares against their device-signed sigs." Richer than just "txid confirmed." Noted for plan phase.
 
 ---
 
@@ -119,8 +115,9 @@ A Nano S Plus running the Radiant Ledger app can:
 Plus supporting infrastructure:
 
 6. Python oracle in `scripts/radiant-preimage-oracle.py` that reconstructs any Radiant sighash from unsigned tx + prevout data
-7. Bit-compare test harness that runs oracle output vs. device output for a known test vector
-8. Updated `INVESTIGATION.md` with the fix arc + final mainnet txid
+7. **Oracle self-validation** — oracle-computed sighash for at least one pre-existing mainnet-confirmed RXD tx, used with that tx's published `(signature, pubkey)` via local `secp256k1.verify`, returns true. **This must pass before the oracle is trusted as the device-verification truth.**
+8. Comparison test harness that runs oracle output vs. device signatures for a known test vector (oracle sighash + device signature → verify locally)
+9. Updated `INVESTIGATION.md` with the fix arc + final mainnet txid
 
 ---
 
