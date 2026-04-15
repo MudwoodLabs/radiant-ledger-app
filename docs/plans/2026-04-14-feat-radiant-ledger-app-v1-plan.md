@@ -420,6 +420,16 @@ Adoption counters (installs / mainnet-txs-per-month) are explicitly **not** rele
 
 **v2 — Glyph / NFT support.** Will require teaching the C app's script parser to recognize Radiant's V2 opcodes (`OP_PUSHINPUTREFSINGLETON` = `0xd8`, K12, BLAKE3, etc.). Significant work in `lib-app-bitcoin/transaction.c` parser. Test fixtures will come from FlipperHub's `blockchain_rpc.php` (golden unsigned-tx → expected-sig pairs) — see [v1→v2 Bridge in brainstorm](../brainstorms/2026-04-14-radiant-ledger-app-v1-brainstorm.md#v1-→-v2-bridge).
 
+**Additional v2 items surfaced during Phase 1 hardware testing** (full list in [2026-04-15 remediation brainstorm "v2 Tracking" section](../brainstorms/2026-04-15-hashoutputhashes-remediation-brainstorm.md#v2-tracking-items-surfaced-during-this-brainstorm)):
+
+- Real `GetPushRefs` opcode-aware scanning of output scriptPubKeys (replaces v1's canonical-P2PKH short-circuit)
+- Relax canonical-P2PKH output check — enables sends to P2SH addresses and OP_RETURN memos
+- `SIGHASH_SINGLE` preimage path (Radiant's SINGLE construction differs from ALL/NONE)
+- `SIGHASH_ANYONECANPAY` support
+- Schnorr signature emission (shorter sigs → lower fees)
+- Speculos / Ragger emulator CI test harness
+- Device UX for Glyph-specific signing (show token name? ref ID?)
+
 **v3 — Device coverage expansion.** Nano X (BLE complexity), Stax/Flex (NBGL UI rewrite). Demand-driven.
 
 **v4 — Official Ledger listing.** Submit through Ledger's review process. Requires security audit (~$30-80k budget per audit firm) and a formal Ledger relationship. Justified only after sustained adoption.
