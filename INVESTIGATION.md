@@ -75,6 +75,45 @@ Sequence: prior Boilerplate uninstalled → loadApp invoked with `--path "44'/0'
 
 ---
 
+## Phase 1 walking skeleton — milestone (2026-04-15)
+
+**Radiant Ledger app live on real hardware.**
+
+C diff: ~58 lines across 5 files in `lib-app-bitcoin@radiant-v1` (commit `6e4228a`):
+- `context.h` — new `COIN_KIND_RADIANT` enum value
+- `helpers.{h,c}` — `is_radiant_path_allowed()` strict path-lock helper
+- `handler/hash_sign.c` — extend SIGHASH_FORKID gate; refuse signing outside m/44'/512'
+- `handler/get_wallet_public_key.c` — explicit Radiant arm rejecting CashAddr; refuse derivation outside m/44'/512'
+
+Build:
+- `app-radiant@develop` — submodule pinned at `6e4228a`, Makefile `radiant` variant added
+- CI matrix builds both `bitcoin_cash` (regression) and `radiant` (new) green
+- **Reproducibility verified**: local Docker build SHA256 matches CI artifact SHA256 exactly
+  - `app.hex`: `0076b3c7da1659b5310350a8c5fea420f3f7a112ef2a11e40eb4072e7f0076b5`
+  - `app.elf`: `6cc604c026479c0817c2da3583a11af263b55d25bf7119ee767f3ea6e71fab2f`
+
+Device:
+- Sideloaded to Nano S Plus (developer device, real seed).
+- Derived address at `m/44'/512'/0'/0/0`: **`1LkYcHBgsNMvtYfySeZPh29fPrJaVFhMRc`**
+- Independently re-derived from device pubkey via Python → byte-identical match
+- Pubkey: `0445e713b307d0280d7d621292cfc218d5e649e127c72e8420824ecd246207ea8e7e308375c168ed642b8add3fc2353fca346555e47250973130c2cbf6cea8a9e6`
+
+Runtime path-lock validated against four test cases:
+| Path | Outcome | Expected |
+|---|---|---|
+| `m/44'/512'/0'/0/0` | derives `1LkYcHB...` | succeed ✅ |
+| `m/44'/512'/0'/0/1` | derives `15jhhFT...` | succeed ✅ |
+| `m/44'/0'/0'/0/0` (Bitcoin) | SW 6a80 | reject ✅ |
+| `m/44'/145'/0'/0/0` (BCH) | SW 6a80 | reject ✅ |
+
+Outstanding for Phase 1 finish line:
+- Plugin work: modify Electron Radiant `electroncash_plugins/ledger/ledger.py` derivation path constant
+- Send RXD to `1LkYcHB...` (user-funded)
+- Sign + broadcast a 1-in/1-out send via the Radiant app on Ledger
+- Verify mainnet acceptance via `getrawtransaction`
+
+---
+
 ## Pins recorded for reproducibility
 
 - `LedgerHQ/app-boilerplate` @ `ac10944e8bfed3d1e57af9a856dd6ab716a74a1b`
