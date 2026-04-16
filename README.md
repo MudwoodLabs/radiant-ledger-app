@@ -163,4 +163,4 @@ Have a Nano S Plus and some spare RXD? Open an issue here (or in the [`app-radia
 
 ## License
 
-Docs and Python scripts: MIT-ish / CC0. Referenced upstream projects (`app-bitcoin`, `radiantjs`, `radiant-node`) retain their own licenses.
+MIT. See [LICENSE](LICENSE). Referenced upstream projects (`app-bitcoin`, `radiantjs`, `radiant-node`) retain their own licenses.
