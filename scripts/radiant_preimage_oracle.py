@@ -131,17 +131,93 @@ def get_outputs_hash(tx: Transaction, single_index: int | None = None) -> bytes:
     return sha256d(w)
 
 
-def per_output_summary(out: Output) -> bytes:
-    """76-byte per-output summary for hashOutputHashes. v1: totalRefs=0, refsHash=zeros.
+# Glyph push-ref opcodes (Radiant). Source: radiant-node/src/script/script.h.
+OP_PUSHINPUTREF = 0xD0
+OP_REQUIREINPUTREF = 0xD1
+OP_DISALLOWPUSHINPUTREF = 0xD2
+OP_DISALLOWPUSHINPUTREFSIBLING = 0xD3
+OP_PUSHINPUTREFSINGLETON = 0xD8
 
-    For a future v2 that handles push-refs, extend this to scan the script
-    for OP_PUSHINPUTREF family opcodes, deduplicate, sort, concat, sha256d.
+OP_PUSHDATA1 = 0x4C
+OP_PUSHDATA2 = 0x4D
+OP_PUSHDATA4 = 0x4E
+
+REF_LEN = 36  # 32-byte txid + 4-byte vout LE
+
+
+def get_push_refs_from_script(script: bytes) -> tuple[list[bytes], list[bytes], list[bytes]]:
+    """Walk script bytes; return (push_refs, require_refs, disallow_refs).
+
+    Mirrors radiantjs Script.getPushRefsFromScriptBuffer (lib/script/script.js:106-180).
+    push_refs collects OP_PUSHINPUTREF + OP_PUSHINPUTREFSINGLETON.
+    Each ref is 36 bytes raw; opcode reads `br.read(36)`.
+    Raises if a disallowed ref also appears in push_refs (per radiantjs check).
     """
-    # Phase 1.5.0 Check 3 verified this exact order:
-    # 8B nValue | 32B sha256d(scriptPubKey) | 4B totalRefs LE | 32B refsHash
+    push_refs: list[bytes] = []
+    require_refs: list[bytes] = []
+    disallow_refs: list[bytes] = []
+
+    i = 0
+    n = len(script)
+    while i < n:
+        op = script[i]
+        i += 1
+        if 0 < op < OP_PUSHDATA1:
+            i += op  # skip pushed bytes
+        elif op == OP_PUSHDATA1:
+            length = script[i]; i += 1 + length
+        elif op == OP_PUSHDATA2:
+            length = struct.unpack_from("<H", script, i)[0]; i += 2 + length
+        elif op == OP_PUSHDATA4:
+            length = struct.unpack_from("<I", script, i)[0]; i += 4 + length
+        elif op in (OP_PUSHINPUTREF, OP_REQUIREINPUTREF, OP_DISALLOWPUSHINPUTREF,
+                    OP_DISALLOWPUSHINPUTREFSIBLING, OP_PUSHINPUTREFSINGLETON):
+            ref = script[i:i + REF_LEN]
+            if len(ref) != REF_LEN:
+                raise ValueError(f"truncated ref at offset {i}")
+            i += REF_LEN
+            if op in (OP_PUSHINPUTREF, OP_PUSHINPUTREFSINGLETON):
+                push_refs.append(ref)
+            elif op == OP_REQUIREINPUTREF:
+                require_refs.append(ref)
+            elif op == OP_DISALLOWPUSHINPUTREF:
+                disallow_refs.append(ref)
+        # other opcodes (incl. OP_0, OP_1NEGATE, OP_1..OP_16, control flow) are 1-byte, no payload
+
+    push_set = {r.hex() for r in push_refs}
+    for r in disallow_refs:
+        if r.hex() in push_set:
+            raise ValueError(f"Disallowed ref appears in same output: {r.hex()}")
+
+    return push_refs, require_refs, disallow_refs
+
+
+def compute_refs_hash(push_refs: list[bytes]) -> tuple[int, bytes]:
+    """Per-output (totalRefs, refsHash). Dedupe by hex key, sort lex, concat raw, sha256d.
+
+    Mirrors radiantjs sighash.js:104-123 — sorted_map_by_keys uses Map semantics
+    (one entry per unique key). Sort is JS String.localeCompare on lowercase hex,
+    which for [0-9a-f] coincides with byte-lex order.
+    """
+    if not push_refs:
+        return 0, ZERO_32
+    dedup: dict[str, bytes] = {}
+    for r in push_refs:
+        dedup.setdefault(r.hex(), r)
+    sorted_keys = sorted(dedup.keys())
+    combined = b"".join(dedup[k] for k in sorted_keys)
+    return len(dedup), sha256d(combined)
+
+
+def per_output_summary(out: Output) -> bytes:
+    """76-byte per-output summary for hashOutputHashes.
+
+    Layout (Phase 1.5.0 Check 3):
+      8B nValue | 32B sha256d(scriptPubKey) | 4B totalRefs LE | 32B refsHash
+    """
     script_hash = sha256d(out.script_pubkey)
-    total_refs = 0  # v1 scope: plain P2PKH only; caller ensures canonical P2PKH
-    refs_hash = ZERO_32
+    push_refs, _require, _disallow = get_push_refs_from_script(out.script_pubkey)
+    total_refs, refs_hash = compute_refs_hash(push_refs)
     return u64_le(out.value) + script_hash + u32_le(total_refs) + refs_hash
 
 

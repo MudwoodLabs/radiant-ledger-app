@@ -1,9 +1,9 @@
 {
   "phase": "1.5.2",
-  "description": "Golden test vectors for Radiant Ledger app. Each fixture is a real confirmed mainnet RXD transaction whose published signatures have been verified against the oracle's computed sighash. The device must produce sighashes that match expected_sighash_hex for each input.",
+  "description": "Golden test vectors for Radiant Ledger app. Each fixture is a real confirmed mainnet RXD transaction whose published signatures have been verified against the oracle's computed sighash. The device must produce sighashes that match expected_sighash_hex for each input. Glyph fixture added in Phase 2.0 to exercise push-ref scanner.",
   "generated_via": "scripts/build_fixtures.py",
   "oracle_source": "scripts/radiant_preimage_oracle.py (port of radiantjs sighash.js)",
-  "num_vectors": 4,
+  "num_vectors": 5,
   "vectors": [
     {
       "name": "sweep_1in_1out",
@@ -268,6 +268,60 @@
         }
       ],
       "sighash_type": "0x41 (SIGHASH_ALL | SIGHASH_FORKID)"
+    },
+    {
+      "name": "glyph_2in_4out_pushref_singleton",
+      "shape": "2-in / 4-out (Glyph reveal \u2014 outputs contain OP_PUSHINPUTREF (0xd0) + OP_PUSHINPUTREFSINGLETON (0xd8))",
+      "txid": "72eb90d570807eb9ccf4ac99edc8a7c3e807f694dfde9fac37dc95a1118f04e8",
+      "block": 420794,
+      "signed_tx_hex": "01000000021d3c49f1f982f3b5d2e4f8befb234a10d73f6a38b71f2a841fba2538efc91cb00000000048044465fddc2009b5b22a7f268ac5985a58231e80c00e0c67ee1ffec002d4fa0bda15de6f50a22099e4abcd763f510bb1a96fe458250d626d06ad5e23ebd4f9e710b0afd65f6f0000ffffffff1d3c49f1f982f3b5d2e4f8befb234a10d73f6a38b71f2a841fba2538efc91cb0030000006a473044022036db0711579c2de2ef6dd13f60f774e46dda1123f362df770dd12c0b56bf83e4022019cfe8243555e2d45a23e507bcb8903d79baecea09d05f3fd344d96161ee59974121020ecd32958025fc1584cc86d83e0cecf7005db5ca29b691e94f95c12cf1c0b9d0ffffffff040100000000000000f10458fe0000d88b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a419000000d08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000036889090350c3000874da40a70d74da00bd5175c0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d755150c30000000000004b76a914e9aa4adbe3a3f07887d67d9cedae324711f053ef88acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000dec0e9aa76e378e4a269e69d00000000000000000f6a036d736709736e6b205b7236395d5c9af3cb030000001976a914800d0414e758f790a48ad0f2960d566ef56cd5bf88ac00000000",
+      "version": 1,
+      "locktime": 0,
+      "num_inputs": 2,
+      "num_outputs": 4,
+      "outputs": [
+        {
+          "value_sats": 1,
+          "script_hex": "0458fe0000d88b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a419000000d08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000036889090350c3000874da40a70d74da00bd5175c0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551"
+        },
+        {
+          "value_sats": 50000,
+          "script_hex": "76a914e9aa4adbe3a3f07887d67d9cedae324711f053ef88acbdd08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000dec0e9aa76e378e4a269e69d"
+        },
+        {
+          "value_sats": 0,
+          "script_hex": "6a036d736709736e6b205b7236395d"
+        },
+        {
+          "value_sats": 16306641500,
+          "script_hex": "76a914800d0414e758f790a48ad0f2960d566ef56cd5bf88ac"
+        }
+      ],
+      "inputs": [
+        {
+          "input_index": 0,
+          "prev_txid": "b01cc9ef3825ba1f842a1fb7386a3fd7104a23fbbef8e4d2b5f382f9f1493c1d",
+          "prev_vout": 0,
+          "prev_scriptpubkey_hex": "0457fe0000d88b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a419000000d08b87c3c771b1a9f5015a4f26bfd80979ed196b5366257a6f30929646dfd943a400000000036889090350c3000874da40a70d74da00bd5175c0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551",
+          "prev_value_sats": 1,
+          "sequence": 4294967295,
+          "expected_sighash_hex": "38082a472c7bae0a114722311e40d07d32fe499d067743eb9cb460ca0e3088bf",
+          "note": "vin[0] scriptSig is non-standard Glyph reveal \u2014 no published ECDSA sig to verify against. Sighash listed for completeness."
+        },
+        {
+          "input_index": 1,
+          "prev_txid": "b01cc9ef3825ba1f842a1fb7386a3fd7104a23fbbef8e4d2b5f382f9f1493c1d",
+          "prev_vout": 3,
+          "prev_scriptpubkey_hex": "76a914800d0414e758f790a48ad0f2960d566ef56cd5bf88ac",
+          "prev_value_sats": 16313653000,
+          "sequence": 4294967295,
+          "expected_sighash_hex": "849dbfe3c7e29fb9e667b9f6ab14f125111c08c658a2f66bcb41818c03892e52",
+          "published_signature_der_hex": "3044022036db0711579c2de2ef6dd13f60f774e46dda1123f362df770dd12c0b56bf83e4022019cfe8243555e2d45a23e507bcb8903d79baecea09d05f3fd344d96161ee5997",
+          "published_pubkey_hex": "020ecd32958025fc1584cc86d83e0cecf7005db5ca29b691e94f95c12cf1c0b9d0"
+        }
+      ],
+      "sighash_type": "0x41 (SIGHASH_ALL | SIGHASH_FORKID)",
+      "validation_note": "vin[1] published signature verifies against expected_sighash_hex via test_glyph_mainnet.py. Confirms push-ref scanner produces the hashOutputHashes that Radiant mainnet accepted."
     }
   ]
 }

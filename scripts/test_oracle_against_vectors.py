@@ -87,7 +87,9 @@ def main() -> int:
                 input_pass = False
                 continue
 
-            # Also re-verify published signature for full coverage
+            # Also re-verify published signature for full coverage (skip if non-standard scriptSig)
+            if "published_signature_der_hex" not in inp_spec:
+                continue
             sig_der = bytes.fromhex(inp_spec["published_signature_der_hex"])
             pubkey = bytes.fromhex(inp_spec["published_pubkey_hex"])
             try:
