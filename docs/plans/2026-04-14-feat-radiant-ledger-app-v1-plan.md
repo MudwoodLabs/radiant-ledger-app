@@ -7,6 +7,21 @@ last_revision: 2026-04-15
 
 # Radiant Ledger App v1 — Implementation Plan
 
+> ## 📣 Scope expansion — 2026-04-15 (late)
+>
+> **Glyph / NFT signing is now in-scope for v1.0** (originally deferred to v2). Reasoning: FlipperHub already signs Glyph mints on mainnet via `blockchain_rpc.php`, which gives us real mainnet Glyph txs as test vectors. The scaffolding we built for Phase 1.5 (oracle, FSM, preimage insertion) extends cleanly to push-refs. Estimated additional work: 3–7 focused days.
+>
+> Tracked as GitHub issue [`Zyrtnin-org/app-radiant#1`](https://github.com/Zyrtnin-org/app-radiant/issues/1) (Phase 2A — Glyph / GetPushRefs C implementation).
+>
+> v1.0 scope now: **hardware signing for all standard Radiant txs, including Glyph NFT mint/transfer**. What remains deferred to a true v2: multi-device (Nano X, Stax, Flex), Schnorr signatures, Speculos CI, official Ledger listing. See [Zyrtnin-org/app-radiant#6](https://github.com/Zyrtnin-org/app-radiant/issues/6).
+>
+> All remaining v1 work is tracked as GitHub issues on `Zyrtnin-org/app-radiant`:
+> - #1 Phase 2A — Glyph / GetPushRefs C impl
+> - #2 Phase 2B — Hardening & edge-case tx shapes
+> - #3 Phase 3 — Community testing & reproducibility
+> - #4 Phase 4 — v1.0.0 release prep
+> - #5 Dependency cleanup (btchip-python packaging)
+>
 > ## ⚠️ Scope revision — 2026-04-15
 >
 > Phase 1 hardware testing discovered that Radiant's signature preimage is NOT byte-identical to BCH, contradicting the original research assumption. Radiant inserts a new `hashOutputHashes` field into the preimage between `nSequence` and `hashOutputs` (see [`radiant-node/src/script/interpreter.cpp:2636-2650`](https://github.com/RadiantBlockchain/radiant-node/blob/master/src/script/interpreter.cpp#L2636)). This field is present for **every** Radiant tx, including plain P2PKH, carrying zero-ref summaries when no Glyph push-refs are present.
