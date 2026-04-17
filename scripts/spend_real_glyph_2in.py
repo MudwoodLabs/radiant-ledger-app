@@ -193,6 +193,30 @@ def main():
 
     print(f"\n--- Signed tx ({len(signed_tx)} bytes) ---")
     print(signed_tx.hex())
+
+    # -------------------------------------------------------------------------
+    # A1 — post-assembly sighash round-trip check (both inputs).
+    # Re-parse the assembled tx and recompute each input's sighash. If it does
+    # not match the oracle sighash the device signed, refuse to write out the
+    # hex. Catches assembly bugs that would produce a valid-looking signature
+    # over bytes that differ from the broadcast payload.
+    # -------------------------------------------------------------------------
+    from radiant_preimage_oracle import parse_transaction as _parse_tx
+    reparsed = _parse_tx(signed_tx)
+    rt_sh0 = compute_radiant_sighash(reparsed, 0, bytes.fromhex(IN0_SPK_HEX), IN0_VALUE, 0x41)
+    rt_sh1 = compute_radiant_sighash(reparsed, 1, bytes.fromhex(IN1_SPK_HEX), IN1_VALUE, 0x41)
+    mismatch = []
+    if rt_sh0 != oracle_sh0:
+        mismatch.append(f"  vin[0]: oracle={oracle_sh0.hex()} reparsed={rt_sh0.hex()}")
+    if rt_sh1 != oracle_sh1:
+        mismatch.append(f"  vin[1]: oracle={oracle_sh1.hex()} reparsed={rt_sh1.hex()}")
+    if mismatch:
+        print(f"\n\033[91m✗ ROUND-TRIP SIGHASH MISMATCH — REFUSING TO WRITE TX\033[0m")
+        for m in mismatch: print(m)
+        print("  the assembled tx is NOT the tx the device approved")
+        return 1
+    print(f"\033[92m✓ Round-trip: both inputs re-parse to identical sighashes\033[0m")
+
     Path("/tmp/glyph_spend_signed_2in.hex").write_text(signed_tx.hex() + "\n")
     print(f"\nSaved to /tmp/glyph_spend_signed_2in.hex")
 

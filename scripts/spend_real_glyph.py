@@ -163,6 +163,27 @@ def main():
     print(f"\n--- Signed tx ({len(signed_tx)} bytes) ---")
     print(signed_tx.hex())
 
+    # -------------------------------------------------------------------------
+    # A1 — post-assembly sighash round-trip check.
+    # Re-parse the assembled signed_tx bytes and recompute the sighash for each
+    # input. If it doesn't match the oracle sighash that the device signed, the
+    # tx we're about to broadcast is NOT the tx that was approved — refuse to
+    # write it out. Catches assembly bugs that would otherwise produce a valid-
+    # looking signature over bytes that differ from the broadcast payload.
+    # -------------------------------------------------------------------------
+    from radiant_preimage_oracle import parse_transaction as _parse_tx
+    reparsed = _parse_tx(signed_tx)
+    roundtrip_sighash = compute_radiant_sighash(
+        reparsed, 0, bytes.fromhex(MINT_SPK_HEX), MINT_VALUE, 0x41
+    )
+    if roundtrip_sighash != oracle_sighash:
+        print(f"\n\033[91m✗ ROUND-TRIP SIGHASH MISMATCH — REFUSING TO BROADCAST\033[0m")
+        print(f"  oracle      : {oracle_sighash.hex()}")
+        print(f"  re-parsed tx: {roundtrip_sighash.hex()}")
+        print(f"  the assembled tx is NOT the tx the device approved")
+        return 1
+    print(f"\033[92m✓ Round-trip: re-parsed signed_tx produces identical sighash\033[0m")
+
     # Save to file for broadcast
     out_path = Path("/tmp/glyph_spend_signed.hex")
     out_path.write_text(signed_tx.hex() + "\n")
