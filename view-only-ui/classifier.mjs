@@ -18,6 +18,25 @@ export const VERSION = { p2pkh_prefix: "00" };
                 pkh?: string, ref?: string, raw?: string, note?: string, error?: string }} Classification */
 
 /**
+ * IMPORTANT — consensus vs classifier gap.
+ *
+ * A syntactic "ft" or "nft" match means the scriptPubKey looks like a
+ * Glyph-wrapped P2PKH, NOT that consensus will let you spend it. For NFT
+ * singletons and FT holders, consensus validates the 36-byte ref at spend
+ * time against the UTXO's stored input-ref vector (interpreter.cpp:1751-1760
+ * in radiant-node). An attacker can construct a 63/75-byte lookalike script
+ * whose ref was never committed via a real colored-output chain — this
+ * classifier will return `type: "ft"` for it, but any spend attempt will
+ * fail consensus. The UI should treat the balance figure as "what the
+ * script claims to hold," not "what you can actually move."
+ *
+ * The only way to eliminate this gap is to cross-check each ref against
+ * its originating commit-tx ref vector via node RPC — which is out of
+ * scope for this classifier. Wallets that care about spendability before
+ * display should perform that check before showing the balance.
+ */
+
+/**
  * @param {string} spkHex — the scriptPubKey hex (no 0x prefix)
  * @returns {Classification}
  */

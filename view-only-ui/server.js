@@ -29,14 +29,31 @@ const CLI = "docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.rad
  * shell parses the quoting, which avoids the double-escape mess that breaks
  * JSON args (parentheses, brackets, single quotes) to scantxoutset.
  */
+// Hard cap on upstream RPC output so a compromised or misbehaving node can't
+// pipe arbitrary bytes into our memory. getblock v2 on a fat block is ~10 MB
+// max on Radiant mainnet; 50 MB leaves headroom without risking OOM.
+const MAX_RPC_BYTES = 50 * 1024 * 1024;
+
 function rpc(remoteCmd) {
   return new Promise((resolve, reject) => {
     const p = spawn("ssh", [VPS, `${CLI} ${remoteCmd}`], { stdio: ["ignore", "pipe", "pipe"] });
     const chunks = [], errChunks = [];
-    p.stdout.on("data", c => chunks.push(c));
+    let total = 0;
+    let killed = false;
+    p.stdout.on("data", c => {
+      total += c.length;
+      if (total > MAX_RPC_BYTES && !killed) {
+        killed = true;
+        p.kill("SIGKILL");
+        reject(new Error(`radiant-cli response exceeded ${MAX_RPC_BYTES} bytes`));
+        return;
+      }
+      chunks.push(c);
+    });
     p.stderr.on("data", c => errChunks.push(c));
     p.on("error", reject);
     p.on("close", code => {
+      if (killed) return;
       if (code === 0) return resolve(Buffer.concat(chunks).toString("utf8").trim());
       const stderr = Buffer.concat(errChunks).toString("utf8").trim();
       reject(new Error(`radiant-cli exit=${code}: ${stderr || "no stderr"}`));
@@ -68,9 +85,18 @@ const REVEAL_MAX_IN_FLIGHT = 3;
  * standard glyph mints put reveal in the same block or the next one or two,
  * so this almost always finds it in ≤2 block reads.
  */
+// Cache entries expire after CACHE_TTL_MS. This protects against chain reorgs
+// where a reveal tx gets orphaned and a new tx re-reveals the same commit with
+// different CBOR metadata. Without TTL the UI would show stale metadata
+// indefinitely. 10 minutes is much longer than typical reorg depth.
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
 async function findReveal(refHex) {
   const cached = revealCache.get(refHex);
-  if (cached) return cached;
+  if (cached && (Date.now() - cached.cached_at_ms) < CACHE_TTL_MS) {
+    return cached;
+  }
+  if (cached) revealCache.delete(refHex);  // expired
   if (revealInFlight >= REVEAL_MAX_IN_FLIGHT) {
     throw new Error("too many concurrent reveal lookups; retry in a few seconds");
   }
@@ -112,6 +138,7 @@ async function findRevealInner(refHex) {
             commit_block_height: header.height,
             reveal_block_height: height,
             blocks_scanned: i + 1,
+            cached_at_ms: Date.now(),
           };
           revealCache.set(refHex, result);
           return result;
@@ -133,7 +160,28 @@ http.createServer(async (req, res) => {
     }
     const txMatch = req.url.match(/^\/tx\/([0-9a-fA-F]{64})\/?$/);
     if (txMatch && isTxid(txMatch[1])) {
-      res.end(await rpc(`getrawtransaction ${txMatch[1]} 1`));
+      const requested = txMatch[1].toLowerCase();
+      const rawJson = await rpc(`getrawtransaction ${requested} 1`);
+      // Round-trip check: a compromised node could return tx data for a
+      // different txid than requested (e.g. to trick the UI into rendering
+      // attacker metadata under a legitimate txid). Parse + verify before
+      // forwarding to the browser. If the node lies, the anomaly is
+      // surfaced loudly.
+      try {
+        const tx = JSON.parse(rawJson);
+        const returned = String(tx.txid || "").toLowerCase();
+        if (returned !== requested) {
+          console.error(`txid mismatch: requested ${requested}, node returned ${returned}`);
+          res.statusCode = 502;
+          res.end(JSON.stringify({ error: "upstream node returned tx with different txid than requested" }));
+          return;
+        }
+      } catch (e) {
+        res.statusCode = 502;
+        res.end(JSON.stringify({ error: "upstream returned unparseable JSON" }));
+        return;
+      }
+      res.end(rawJson);
       return;
     }
     // Plain-P2PKH UTXO scan for a Radiant address (read-only, uses scantxoutset)

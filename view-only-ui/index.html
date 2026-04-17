@@ -261,6 +261,13 @@ async function renderMetadata(ref, container, endpoint) {
     const ticker = payload.ticker || payload.tkr || null;
     const desc   = payload.description || payload.desc || null;
     const loc    = payload.loc    || null;
+    const locHash = (() => {
+      const lh = payload.loc_hash || payload.locHash;
+      if (!lh) return null;
+      if (typeof lh === "string") return lh;               // "sha256:..." or hex
+      if (lh instanceof Uint8Array) return Array.from(lh).map(b => b.toString(16).padStart(2, "0")).join("");
+      return null;
+    })();
     const protos = Array.isArray(payload.p) ? payload.p : (payload.p != null ? [payload.p] : []);
     const protoLabels = protos.map(p => `${p} (${PROTOCOL_NAMES[p] || "?"})`).join(", ");
 
@@ -303,8 +310,34 @@ async function renderMetadata(ref, container, endpoint) {
     } else if (loc) {
       const cid = String(loc).replace(/^ipfs:\/\//, "");
       if (CID_RE.test(cid)) {
-        imgHtml = `<img class="metadata-img" src="${escHtml(endpoint)}/ipfs/${escHtml(cid)}" alt="${escHtml(name)}" loading="lazy"
+        const imgId = `ipfs-img-${Math.random().toString(36).slice(2, 10)}`;
+        imgHtml = `<img id="${imgId}" class="metadata-img" src="${escHtml(endpoint)}/ipfs/${escHtml(cid)}" alt="${escHtml(name)}" loading="lazy"
                          onerror="this.outerHTML='<div class=&quot;metadata-img&quot; style=&quot;padding:10px;color:var(--muted);font-size:11px&quot;>IPFS fetch failed</div>'">`;
+        // Post-load, if the payload declared loc_hash, verify the fetched bytes
+        // match. Mismatch means the IPFS content was swapped post-mint (a real
+        // attack against NFTs without content integrity binding).
+        if (locHash) {
+          setTimeout(async () => {
+            try {
+              const resp = await fetch(`${endpoint}/ipfs/${encodeURIComponent(cid)}`);
+              if (!resp.ok) return;
+              const bytes = new Uint8Array(await resp.arrayBuffer());
+              const digest = await crypto.subtle.digest("SHA-256", bytes);
+              const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+              const expected = locHash.replace(/^sha256:/i, "").toLowerCase();
+              if (hex !== expected) {
+                const img = document.getElementById(imgId);
+                if (img) {
+                  img.style.outline = "3px solid var(--err)";
+                  img.title = `⚠️ loc_hash mismatch — IPFS content does not match on-chain hash. Expected: ${expected.slice(0, 16)}…, got: ${hex.slice(0, 16)}…`;
+                }
+              }
+            } catch (e) {
+              // Silent — image already rendered; verification is advisory.
+              console.warn("loc_hash verification failed:", e.message);
+            }
+          }, 100);
+        }
       }
     }
 
@@ -320,6 +353,11 @@ async function renderMetadata(ref, container, endpoint) {
       } else {
         fields.push(["ipfs", `<span style="color:var(--warn)">${escHtml(loc)} (invalid CID — not rendered)</span>`]);
       }
+    }
+    if (locHash) {
+      fields.push(["loc_hash", `<span class="hex" style="font-size:11px">${escHtml(locHash)}</span> — verified against IPFS bytes on load (red outline on image if mismatched)`]);
+    } else if (loc) {
+      fields.push(["loc_hash", `<span style="color:var(--warn)">missing — IPFS content integrity NOT verified (content can be swapped post-mint)</span>`]);
     }
     const revealTxid = escHtml(data.reveal_tx.txid);
     fields.push(["reveal tx", `<a href="https://explorer.radiantblockchain.org/tx/${revealTxid}" target="_blank">${revealTxid}</a>`]);
