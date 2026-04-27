@@ -42,19 +42,22 @@ transfer rather than a burn. Radiant's singleton rules require exactly one
 output in the tx to carry this ref for the spend to be valid.
 """
 
-import hashlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / "apps/Electron-Wallet/electroncash_plugins/ledger/vendor"))
 from btchip.btchip import btchip
 from btchip.btchipComm import getDongle
-from btchip.bitcoinTransaction import bitcoinTransaction
 
 sys.path.insert(0, str(Path(__file__).parent))
 from radiant_preimage_oracle import (
     Transaction, Input, Output, compute_radiant_sighash,
     u32_le, u64_le, varint_encode,
+)
+from _spend_helpers import (
+    GREEN, RED, YELLOW, END,
+    derive_pubkey, load_trusted_input, process_device_sig,
+    make_script_sig, verify_oracle_sigs, check_round_trip_sighash,
 )
 
 # ----- Input 0: Glyph UTXO (new NFT) -----
@@ -103,22 +106,11 @@ FEE = 4_200_000                                        # ~11,140 sats/byte for a
 NFT_OUTPUT_VALUE = IN0_VALUE + IN1_VALUE - FEE          # 3,080,000 locked into the NFT
 CHANGE_VALUE = 0
 
-GREEN = "\033[92m"; RED = "\033[91m"; YELLOW = "\033[93m"; END = "\033[0m"
-
-
-def derive_pubkey(app, path):
-    info = app.getWalletPublicKey(path)
-    pk_raw = bytes(info['publicKey'])
-    if pk_raw[0] == 0x04:
-        y = pk_raw[33:65]
-        pk_compressed = bytes([0x02 + (y[-1] & 1)]) + pk_raw[1:33]
-    else:
-        pk_compressed = pk_raw
-    return info['address'], pk_compressed
+import hashlib
 
 
 def hash160(pk: bytes) -> bytes:
-    return hashlib.new('ripemd160', hashlib.sha256(pk).digest()).digest()
+    return hashlib.new("ripemd160", hashlib.sha256(pk).digest()).digest()
 
 
 def main():
@@ -183,41 +175,13 @@ def main():
     print(f"Oracle sighash input 0 (Glyph): {oracle_sh0.hex()}")
     print(f"Oracle sighash input 1 (P2PKH): {oracle_sh1.hex()}\n")
 
-    # ---- Get trusted inputs ----
-    # H-6 (audit 2026-04-25): verify the on-disk prev-tx hex actually hashes
-    # to IN0_TXID / IN1_TXID before feeding it to getTrustedInput. A stale or
-    # tampered hex file would silently produce a trusted-input over the wrong
-    # UTXO; the round-trip sighash check at the end catches the resulting
-    # broken signature, but failing here gives a clearer diagnosis and avoids
-    # any USB exchange with the device for an obviously-wrong input.
-    import hashlib as _h
-    def _sha256d(b: bytes) -> bytes:
-        return _h.sha256(_h.sha256(b).digest()).digest()
-
-    prev0_raw = bytes.fromhex(open(IN0_PREV_RAW_PATH).read().strip())
-    _calc_txid0 = _sha256d(prev0_raw)[::-1].hex()
-    if _calc_txid0 != IN0_TXID.lower():
-        print(f"{RED}✗ prev-tx integrity FAIL for input 0:{END}")
-        print(f"  file {IN0_PREV_RAW_PATH} hashes to {_calc_txid0}")
-        print(f"  expected {IN0_TXID}")
-        print(f"  refusing to call getTrustedInput on a substituted prev-tx")
+    # ---- Get trusted inputs (H-6: integrity check before USB exchange) ----
+    ti0 = load_trusted_input(app, IN0_PREV_RAW_PATH, IN0_TXID, IN0_VOUT, "input 0 (Glyph)")
+    if ti0 is None:
         return 1
-    prev0_tx = bitcoinTransaction(prev0_raw)
-    ti0 = app.getTrustedInput(prev0_tx, IN0_VOUT)
-    ti0['sequence'] = "feffffff"
-    ti0['witness'] = True
-
-    prev1_raw = bytes.fromhex(open(IN1_PREV_RAW_PATH).read().strip())
-    _calc_txid1 = _sha256d(prev1_raw)[::-1].hex()
-    if _calc_txid1 != IN1_TXID.lower():
-        print(f"{RED}✗ prev-tx integrity FAIL for input 1:{END}")
-        print(f"  file {IN1_PREV_RAW_PATH} hashes to {_calc_txid1}")
-        print(f"  expected {IN1_TXID}")
+    ti1 = load_trusted_input(app, IN1_PREV_RAW_PATH, IN1_TXID, IN1_VOUT, "input 1 (P2PKH)")
+    if ti1 is None:
         return 1
-    prev1_tx = bitcoinTransaction(prev1_raw)
-    ti1 = app.getTrustedInput(prev1_tx, IN1_VOUT)
-    ti1['sequence'] = "feffffff"
-    ti1['witness'] = True
 
     app.enableAlternate2fa(False)
 
@@ -279,79 +243,29 @@ def main():
         _offset = _chunk_end
     output_data = {'outputData': _outputs_ser}
 
-    # ---- Sign each input with its own scriptCode ----
-    # C-1 + C-3 + H-9 (audit 2026-04-25):
-    #   C-1: read the device-returned sighash byte, assert it matches what we
-    #        asked for (0x41). Previously the assembly path hardcoded 0x41 in
-    #        make_script_sig() regardless of what the device returned —
-    #        a future firmware that returned a different byte would silently
-    #        broadcast an invalid signature.
-    #   H-9: a sig whose first byte isn't 0x30 used to be silently rewritten
-    #        to start with 0x30. That masks corruption. Refuse instead.
-    #   C-3: low-S normalization. Device firmware should return canonical
-    #        low-S, but Radiant's STRICTENC consensus rule rejects high-S on
-    #        broadcast — fail-and-broadcast costs a fee + a confusing debug.
-    from ecdsa.util import sigdecode_der as _sigdecode_der, sigencode_der as _sigencode_der
-    from ecdsa.curves import SECP256k1 as _C256
-    _N = _C256.order
-    _HALF_N = _N // 2
-
-    def _process_device_sig(sig: bytes, expected_sighash: int = 0x41, label: str = "") -> tuple[bytes, int]:
-        """Returns (canonical_low_S_der, device_sighash_byte). Aborts on protocol violations."""
-        device_sighash = sig[-1]
-        assert device_sighash == expected_sighash, (
-            f"Device returned sighash 0x{device_sighash:02x} for {label}, expected 0x{expected_sighash:02x}. "
-            f"Refusing to silently rewrite — investigate firmware version or wrong-app-open."
-        )
-        sig_der = bytes(sig[:-1])
-        if sig_der[0] != 0x30:
-            raise RuntimeError(
-                f"Non-DER signature from device for {label} (first byte 0x{sig_der[0]:02x}); "
-                f"refusing to fabricate prefix."
-            )
-        # Low-S normalization
-        r, s = _sigdecode_der(sig_der, _N)
-        if s > _HALF_N:
-            print(f"  ! device returned high-S sig for {label}; flipping to canonical low-S")
-            s = _N - s
-            sig_der = _sigencode_der(r, s, _N)
-        assert s <= _HALF_N, "low-S invariant violated after flip"
-        return sig_der, device_sighash
-
-    # Input 0: Glyph UTXO, scriptCode = 63-byte Glyph-P2PKH (Constraint C)
+    # ---- Sign each input (C-1 + C-3 + H-9 enforced inside process_device_sig) ----
+    # Input 0: Glyph UTXO, scriptCode = 63-byte Glyph-P2PKH
     app.startUntrustedTransaction(False, 0, [chip_inputs[0]], bytes.fromhex(IN0_SPK_HEX), version=0x02)
     sig0 = app.untrustedHashSign(IN0_PATH, lockTime=0, sighashType=0x41)
-    sig0_der, sig0_sighash = _process_device_sig(sig0, expected_sighash=0x41, label="input 0 (Glyph)")
+    sig0_der, sig0_sighash = process_device_sig(sig0, label="input 0 (Glyph)")
     print(f"Device sig input 0: {sig0_der.hex()} (sighash 0x{sig0_sighash:02x})")
 
     # Input 1: plain P2PKH, scriptCode = 25-byte P2PKH
     app.startUntrustedTransaction(False, 0, [chip_inputs[1]], bytes.fromhex(IN1_SPK_HEX), version=0x02)
     sig1 = app.untrustedHashSign(IN1_PATH, lockTime=0, sighashType=0x41)
-    sig1_der, sig1_sighash = _process_device_sig(sig1, expected_sighash=0x41, label="input 1 (P2PKH)")
+    sig1_der, sig1_sighash = process_device_sig(sig1, label="input 1 (P2PKH)")
     print(f"Device sig input 1: {sig1_der.hex()} (sighash 0x{sig1_sighash:02x})")
 
     dongle.close()
 
     # ---- Verify against oracle ----
-    import ecdsa
-    from ecdsa import VerifyingKey, SECP256k1
-    from ecdsa.util import sigdecode_der
-    for i, (sig, sh, pk, label) in enumerate([(sig0_der, oracle_sh0, pk0, "Glyph"), (sig1_der, oracle_sh1, pk1, "P2PKH")]):
-        vk = VerifyingKey.from_string(pk, curve=SECP256k1)
-        try:
-            vk.verify_digest(sig, sh, sigdecode=sigdecode_der)
-            print(f"{GREEN}✓ input {i} ({label}) sig verifies against oracle sighash{END}")
-        except ecdsa.BadSignatureError:
-            print(f"{RED}✗ input {i} ({label}) sig FAILS against oracle{END}")
-            return 1
+    if not verify_oracle_sigs([
+        (sig0_der, oracle_sh0, pk0, "Glyph"),
+        (sig1_der, oracle_sh1, pk1, "P2PKH"),
+    ]):
+        return 1
 
     # ---- Assemble signed tx ----
-    # C-1: append the *device-returned* sighash byte (already asserted == 0x41
-    # in _process_device_sig). Previously hardcoded 0x41 — see C-1 comment above.
-    def make_script_sig(sig, pk, sighash_byte):
-        swh = sig + bytes([sighash_byte])
-        return varint_encode(len(swh)) + swh + varint_encode(len(pk)) + pk
-
     ss0 = make_script_sig(sig0_der, pk0, sig0_sighash)
     ss1 = make_script_sig(sig1_der, pk1, sig1_sighash)
 
@@ -370,27 +284,14 @@ def main():
     print(f"\n--- Signed tx ({len(signed_tx)} bytes) ---")
     print(signed_tx.hex())
 
-    # H-3 (audit 2026-04-25): post-assembly sighash round-trip check.
-    # Re-parse the assembled signed_tx bytes and recompute the sighash for each
-    # input. If it doesn't match the oracle sighash that the device signed, the
-    # tx we're about to broadcast is NOT the tx that was approved — refuse to
-    # write it out. Catches assembly bugs that would otherwise produce a valid-
-    # looking signature over bytes that differ from the broadcast payload.
-    # Already shipped in spend_real_glyph_2in.py:198+ via commit bfc8b0f; this
-    # is the matching port to the canonical mainnet-tested transfer script.
-    from radiant_preimage_oracle import parse_transaction as _parse_tx
-    reparsed = _parse_tx(signed_tx)
-    rt_sh0 = compute_radiant_sighash(reparsed, 0, bytes.fromhex(IN0_SPK_HEX), IN0_VALUE, 0x41)
-    rt_sh1 = compute_radiant_sighash(reparsed, 1, bytes.fromhex(IN1_SPK_HEX), IN1_VALUE, 0x41)
-    if rt_sh0 != oracle_sh0 or rt_sh1 != oracle_sh1:
-        print(f"\n{RED}✗ ROUND-TRIP SIGHASH MISMATCH — REFUSING TO BROADCAST{END}")
-        if rt_sh0 != oracle_sh0:
-            print(f"  input 0: oracle {oracle_sh0.hex()}  reparsed {rt_sh0.hex()}")
-        if rt_sh1 != oracle_sh1:
-            print(f"  input 1: oracle {oracle_sh1.hex()}  reparsed {rt_sh1.hex()}")
-        print(f"  the assembled tx is NOT the tx the device approved")
+    # ---- A1: round-trip sighash check before writing ----
+    if not check_round_trip_sighash(
+        signed_tx,
+        [IN0_SPK_HEX, IN1_SPK_HEX],
+        [IN0_VALUE, IN1_VALUE],
+        [oracle_sh0, oracle_sh1],
+    ):
         return 1
-    print(f"{GREEN}✓ Round-trip: re-parsed signed_tx produces identical sighashes for both inputs{END}")
 
     Path("/tmp/glyph_transfer_signed.hex").write_text(signed_tx.hex() + "\n")
     print(f"\nSaved to /tmp/glyph_transfer_signed.hex")
