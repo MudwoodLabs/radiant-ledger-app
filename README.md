@@ -46,7 +46,7 @@ scripts/
   test_oracle_against_vectors.py     # re-verifies the oracle against the fixtures
   derive-address.py                  # direct APDU harness to ask the device for a pubkey at any path
   find_ft_utxo.py                    # mainnet scanner: find FT-shaped outputs, classify by shape, group by ref
-  # (additional scripts: spend_real_glyph*.py, test_device_*.py, diagnose_glyph_sig.py, etc.)
+  # (additional test scripts: test_device_*.py, test_glyph_mainnet.py, etc.)
   task-0.0-runbook.md                # Phase 0.0 LSB-014 path-lock verification steps
 
   fixtures/

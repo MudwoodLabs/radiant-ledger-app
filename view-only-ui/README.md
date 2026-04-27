@@ -124,8 +124,8 @@ Expected: `15 passed, 0 failed`. 12 scriptPubKey vectors + 2 round-trip builders
 - **`scantxoutset` is expensive.** Each scan walks the full UTXO set
   (~28M entries, ~30s on our VPS). Production wallets would maintain their own
   UTXO index instead.
-- **No spending.** Spending uses the existing `spend_real_glyph*.py` harness at
-  [`../scripts/`](../scripts/) and is documented in
+- **No spending.** Spending uses `scripts/spend_glyph_2in_transfer.py` (transfer-preserving)
+  or `scripts/spend_real_glyph_2in.py` (burn) and is documented in
   [`../docs/solutions/integration-issues/radiant-glyph-spend-end-to-end-mainnet.md`](../docs/solutions/integration-issues/radiant-glyph-spend-end-to-end-mainnet.md).
 
 ## What this is meant to unlock in Electron-Wallet

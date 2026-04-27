@@ -20,7 +20,7 @@ Once the firmware is updated and re-sideloaded, this script should run end
 to end. Everything on the script side (sighash, signing, verification) is
 correct — only the device display-approval check is rejecting.
 
-Differs from spend_glyph_2in_v2.py (the "burn" variant) in the output layout:
+Differs from spend_real_glyph_2in.py (the "burn" variant) in the output layout:
 
   burn:      OUT0 = plain P2PKH                              (NFT destroyed)
   transfer:  OUT0 = d8 <ref36> 75 <P2PKH_dest>               (NFT moves)
