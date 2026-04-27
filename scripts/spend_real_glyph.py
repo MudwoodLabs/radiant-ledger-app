@@ -94,8 +94,23 @@ def main():
     print(f"Oracle sighash: {oracle_sighash.hex()}")
 
     # Sign via device
-    prev_raw = open('/tmp/glyph_mint_raw.hex').read().strip()
-    prev_tx = bitcoinTransaction(bytes.fromhex(prev_raw))
+    # H-6 (audit 2026-04-25): verify the on-disk prev-tx hex actually hashes
+    # to MINT_TXID before feeding it to getTrustedInput. A stale or tampered
+    # hex file would silently produce a trusted-input over the wrong UTXO;
+    # the round-trip sighash check at the end catches that, but failing here
+    # gives a clearer diagnosis and avoids any USB exchange for a wrong input.
+    import hashlib as _h
+    def _sha256d(b: bytes) -> bytes:
+        return _h.sha256(_h.sha256(b).digest()).digest()
+
+    prev_raw_hex = open('/tmp/glyph_mint_raw.hex').read().strip()
+    prev_raw = bytes.fromhex(prev_raw_hex)
+    _calc_txid = _sha256d(prev_raw)[::-1].hex()
+    if _calc_txid != MINT_TXID.lower():
+        print(f"\n\033[91m✗ prev-tx integrity FAIL: file hashes to {_calc_txid}, expected {MINT_TXID}\033[0m")
+        print(f"  refusing to call getTrustedInput on a substituted prev-tx")
+        return 1
+    prev_tx = bitcoinTransaction(prev_raw)
     trusted_input = app.getTrustedInput(prev_tx, MINT_VOUT)
     trusted_input['sequence'] = "feffffff"
     trusted_input['witness'] = True
@@ -123,12 +138,34 @@ def main():
     app.startUntrustedTransaction(False, 0, chip_inputs, redeem_script, version=0x02)
     signature = app.untrustedHashSign(LEDGER_PATH, lockTime=0, sighashType=0x41)
 
-    # Signature from device: raw_sig + 0x41 sighash byte at end
+    # C-1 + C-3 + H-9 (audit 2026-04-25):
+    #   C-1: read the device-returned sighash byte, assert it == 0x41 we asked
+    #        for, and use *that* byte (not a hardcoded 0x41) on assembly.
+    #   H-9: a sig whose first byte isn't 0x30 used to be silently rewritten;
+    #        refuse instead — that path masks corruption.
+    #   C-3: low-S normalization. Radiant STRICTENC rejects high-S on broadcast.
+    from ecdsa.util import sigdecode_der as _sigdecode_der, sigencode_der as _sigencode_der
+    from ecdsa.curves import SECP256k1 as _C256
+    _N = _C256.order
+
+    device_sighash = signature[-1]
+    assert device_sighash == 0x41, (
+        f"Device returned sighash 0x{device_sighash:02x}, expected 0x41. "
+        f"Refusing to silently rewrite — investigate firmware version."
+    )
     sig_der = bytes(signature[:-1])
     if sig_der[0] != 0x30:
-        sig_der = bytes([0x30]) + sig_der[1:]
+        raise RuntimeError(
+            f"Non-DER signature from device (first byte 0x{sig_der[0]:02x}); "
+            f"refusing to fabricate prefix."
+        )
+    _r, _s = _sigdecode_der(sig_der, _N)
+    if _s > _N // 2:
+        print("  ! device returned high-S sig; flipping to canonical low-S")
+        _s = _N - _s
+        sig_der = _sigencode_der(_r, _s, _N)
     dongle.close()
-    print(f"Device signature: {sig_der.hex()}")
+    print(f"Device signature: {sig_der.hex()} (sighash 0x{device_sighash:02x})")
 
     # Verify against oracle
     import ecdsa
@@ -143,7 +180,8 @@ def main():
         return 1
 
     # Build signed tx: input with scriptSig = <sig_with_hashtype> <pubkey>
-    sig_with_hashtype = sig_der + bytes([0x41])
+    # C-1: append the *device-returned* sighash byte (already asserted == 0x41).
+    sig_with_hashtype = sig_der + bytes([device_sighash])
     script_sig = (
         varint_encode(len(sig_with_hashtype)) + sig_with_hashtype +
         varint_encode(len(pk_compressed)) + pk_compressed
